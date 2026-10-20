@@ -1,0 +1,6 @@
+hostname,phrase,country_code,device,observed_on,position
+example.de,seo agentur bonn,DE,desktop,2026-10-18,12
+example.de,seo agentur bonn,DE,desktop,2026-10-19,5
+example.de,python lernen,DE,desktop,2026-10-19,8
+example.de,seo software,DE,mobile,2026-10-18,unranked
+example.de,seo software,DE,mobile,2026-10-19,3
