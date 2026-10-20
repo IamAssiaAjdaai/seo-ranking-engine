@@ -377,3 +377,335 @@ def test_create_keyword_api(db_connection):
 
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+def test_create_ranking_api(db_connection):
+
+    def override_get_db():
+        with Session(
+            bind=db_connection,
+            join_transaction_mode="create_savepoint",
+        ) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        unique_id = uuid4().hex[:12]
+
+        with TestClient(app) as client:
+
+            # Create a test domain
+            domain_response = client.post(
+                "/domains",
+                json={
+                    "hostname": f"ranking-{unique_id}.example"
+                },
+            )
+
+            assert domain_response.status_code == 201
+            domain_id = domain_response.json()["id"]
+
+            # Create a test keyword
+            keyword_response = client.post(
+                "/keywords",
+                json={
+                    "phrase": f"seo ranking {unique_id}",
+                    "country_code": "DE",
+                    "device": "desktop",
+                },
+            )
+
+            assert keyword_response.status_code == 201
+            keyword_id = keyword_response.json()["id"]
+
+            payload = {
+                "domain_id": domain_id,
+                "keyword_id": keyword_id,
+                "observed_on": "2026-10-20",
+                "position": 5,
+            }
+
+            # Create a ranking
+            response = client.post(
+                "/rankings",
+                json=payload,
+            )
+
+            assert response.status_code == 201
+            assert response.json()["position"] == 5
+            assert response.json()["domain_id"] == domain_id
+
+            # Duplicate ranking
+            duplicate = client.post(
+                "/rankings",
+                json=payload,
+            )
+
+            assert duplicate.status_code == 409
+
+            # Invalid position
+            invalid = client.post(
+                "/rankings",
+                json={**payload, "position": 101},
+            )
+
+            assert invalid.status_code == 422
+
+            # Missing domain
+            missing_domain = client.post(
+                "/rankings",
+                json={**payload, "domain_id": 999999999},
+            )
+
+            assert missing_domain.status_code == 404
+
+            # Missing keyword
+            missing_keyword = client.post(
+                "/rankings",
+                json={**payload, "keyword_id": 999999999},
+            )
+
+            assert missing_keyword.status_code == 404
+
+            # Explicitly observed outside the Top 100
+            unranked = client.post(
+                "/rankings",
+                json={
+                    **payload,
+                    "observed_on": "2026-10-21",
+                    "position": None,
+                },
+            )
+
+            assert unranked.status_code == 201
+            assert unranked.json()["position"] is None
+
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+def test_domain_ranking_history_api(db_connection):
+
+    def override_get_db():
+        with Session(
+            bind=db_connection,
+            join_transaction_mode="create_savepoint",
+        ) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        unique_id = uuid4().hex[:12]
+
+        with TestClient(app) as client:
+            domain_response = client.post(
+                "/domains",
+                json={
+                    "hostname": f"history-{unique_id}.example"
+                },
+            )
+            assert domain_response.status_code == 201
+            domain_id = domain_response.json()["id"]
+
+            keyword_response = client.post(
+                "/keywords",
+                json={
+                    "phrase": f"ranking history {unique_id}",
+                    "country_code": "DE",
+                    "device": "desktop",
+                },
+            )
+            assert keyword_response.status_code == 201
+            keyword_id = keyword_response.json()["id"]
+
+            # Create two observations
+            for observed_on, position in [
+                ("2026-10-18", 12),
+                ("2026-10-19", 5),
+            ]:
+                response = client.post(
+                    "/rankings",
+                    json={
+                        "domain_id": domain_id,
+                        "keyword_id": keyword_id,
+                        "observed_on": observed_on,
+                        "position": position,
+                    },
+                )
+                assert response.status_code == 201
+
+            # Read ranking history
+            response = client.get(
+                f"/domains/{domain_id}/rankings"
+            )
+
+            assert response.status_code == 200
+
+            history = response.json()
+
+            assert len(history) == 2
+            assert [item["position"] for item in history] == [
+                5, 12
+            ]
+            assert all(
+                item["keyword_id"] == keyword_id
+                for item in history
+            )
+
+            # Test pagination
+            page = client.get(
+                f"/domains/{domain_id}/rankings",
+                params={"limit": 1, "offset": 1},
+            )
+
+            assert page.status_code == 200
+            assert len(page.json()) == 1
+            assert page.json()[0]["position"] == 12
+
+            # Domain does not exist
+            missing = client.get(
+                "/domains/999999999/rankings"
+            )
+
+            assert missing.status_code == 404
+
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+def test_ranking_changes_api(db_connection):
+
+    def override_get_db():
+        with Session(
+            bind=db_connection,
+            join_transaction_mode="create_savepoint",
+        ) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        unique_id = uuid4().hex[:12]
+
+        with TestClient(app) as client:
+            # Create domain
+            domain_response = client.post(
+                "/domains",
+                json={
+                    "hostname": f"changes-{unique_id}.example"
+                },
+            )
+
+            assert domain_response.status_code == 201
+            domain_id = domain_response.json()["id"]
+
+            keyword_ids = {}
+
+            cases = [
+                (
+                    "improved",
+                    [
+                        ("2026-10-18", 12),
+                        ("2026-10-20", 3),
+                    ],
+                ),
+                (
+                    "new",
+                    [
+                        ("2026-10-18", None),
+                        ("2026-10-20", 8),
+                    ],
+                ),
+                (
+                    "incomplete",
+                    [
+                        ("2026-10-18", 4),
+                    ],
+                ),
+            ]
+
+            for label, observations in cases:
+                keyword_response = client.post(
+                    "/keywords",
+                    json={
+                        "phrase": f"{label} {unique_id}",
+                        "country_code": "DE",
+                        "device": "desktop",
+                    },
+                )
+
+                assert keyword_response.status_code == 201
+
+                keyword_id = keyword_response.json()["id"]
+                keyword_ids[label] = keyword_id
+
+                for observed_on, position in observations:
+                    ranking_response = client.post(
+                        "/rankings",
+                        json={
+                            "domain_id": domain_id,
+                            "keyword_id": keyword_id,
+                            "observed_on": observed_on,
+                            "position": position,
+                        },
+                    )
+
+                    assert ranking_response.status_code == 201
+
+            url = f"/domains/{domain_id}/changes"
+
+            response = client.get(
+                url,
+                params={
+                    "from_date": "2026-10-18",
+                    "to_date": "2026-10-20",
+                },
+            )
+
+            assert response.status_code == 200
+
+            results = response.json()
+
+            assert len(results) == 2
+
+            by_id = {
+                item["keyword_id"]: item
+                for item in results
+            }
+
+            improved = by_id[keyword_ids["improved"]]
+
+            assert improved["movement"] == 9
+            assert improved["status"] == "improved"
+
+            new = by_id[keyword_ids["new"]]
+
+            assert new["movement"] is None
+            assert new["status"] == "new"
+
+            # A missing observation is NOT a ranking loss
+            assert keyword_ids["incomplete"] not in by_id
+
+            # Invalid date order
+            invalid = client.get(
+                url,
+                params={
+                    "from_date": "2026-10-20",
+                    "to_date": "2026-10-18",
+                },
+            )
+
+            assert invalid.status_code == 422
+
+            # Domain does not exist
+            missing = client.get(
+                "/domains/999999999/changes",
+                params={
+                    "from_date": "2026-10-18",
+                    "to_date": "2026-10-20",
+                },
+            )
+
+            assert missing.status_code == 404
+
+    finally:
+        app.dependency_overrides.pop(get_db, None)
