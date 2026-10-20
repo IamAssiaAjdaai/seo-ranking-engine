@@ -2,6 +2,9 @@
 import re
 from datetime import datetime
 
+from fastapi import Query, Path
+from sqlalchemy import select
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy.exc import IntegrityError
@@ -75,5 +78,36 @@ def create_domain(
         raise
 
     db.refresh(domain)
+
+    return domain
+
+@router.get("", response_model=list[DomainResponse])
+def list_domains(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    statement = (
+        select(Domain)
+        .order_by(Domain.id)
+        .offset(offset)
+        .limit(limit)
+    )
+
+    return db.scalars(statement).all()
+
+
+@router.get("/{domain_id}", response_model=DomainResponse)
+def get_domain(
+    domain_id: int = Path(ge=1),
+    db: Session = Depends(get_db),
+):
+    domain = db.get(Domain, domain_id)
+
+    if domain is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Domain not found",
+        )
 
     return domain

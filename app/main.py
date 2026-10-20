@@ -1,8 +1,12 @@
 
 from typing import Literal
+
 from app.routers.domains import router as domains_router
+from app.routers.keywords import router as keywords_router
+
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
+
 
 app = FastAPI(
     title="SEO Ranking Analytics Engine",
@@ -11,6 +15,7 @@ app = FastAPI(
 )
 
 app.include_router(domains_router)
+app.include_router(keywords_router)
 
 class RankingRequest(BaseModel):
     previous_position: int = Field(ge=1, le=100)

@@ -238,3 +238,142 @@ def test_create_domain_api(db_connection):
 
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+def test_domain_read_endpoints(db_connection):
+
+    def override_get_db():
+        with Session(
+            bind=db_connection,
+            join_transaction_mode="create_savepoint",
+        ) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        hostname = f"read-{uuid4().hex[:12]}.example"
+
+        with TestClient(app) as client:
+            created = client.post(
+                "/domains",
+                json={"hostname": hostname},
+            )
+
+            assert created.status_code == 201
+            domain_id = created.json()["id"]
+
+            # Read specific domain
+            detail = client.get(f"/domains/{domain_id}")
+
+            assert detail.status_code == 200
+            assert detail.json()["hostname"] == hostname
+
+            # List domains
+            listing = client.get(
+                "/domains",
+                params={"limit": 100, "offset": 0},
+            )
+
+            assert listing.status_code == 200
+            assert any(
+                item["id"] == domain_id
+                for item in listing.json()
+            )
+
+            # Pagination
+            page = client.get(
+                "/domains",
+                params={"limit": 1, "offset": 0},
+            )
+
+            assert page.status_code == 200
+            assert len(page.json()) == 1
+
+            # Invalid pagination
+            invalid = client.get(
+                "/domains",
+                params={"limit": 0},
+            )
+            assert invalid.status_code == 422
+
+            # Missing domain
+            missing = client.get(
+                "/domains/999999999"
+            )
+            assert missing.status_code == 404
+
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+def test_create_keyword_api(db_connection):
+
+    def override_get_db():
+        with Session(
+            bind=db_connection,
+            join_transaction_mode="create_savepoint",
+        ) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        phrase = f"seo backend {uuid4().hex[:12]}"
+
+        with TestClient(app) as client:
+
+            # Create keyword
+            response = client.post(
+                "/keywords",
+                json={
+                    "phrase": f"  {phrase.upper()}  ",
+                    "country_code": "de",
+                    "device": "desktop",
+                },
+            )
+
+            assert response.status_code == 201
+
+            data = response.json()
+
+            assert data["phrase"] == phrase
+            assert data["country_code"] == "DE"
+            assert data["device"] == "desktop"
+
+            # Duplicate keyword
+            duplicate = client.post(
+                "/keywords",
+                json={
+                    "phrase": phrase,
+                    "country_code": "DE",
+                    "device": "desktop",
+                },
+            )
+
+            assert duplicate.status_code == 409
+
+            # Same keyword, different device
+            mobile = client.post(
+                "/keywords",
+                json={
+                    "phrase": phrase,
+                    "country_code": "DE",
+                    "device": "mobile",
+                },
+            )
+
+            assert mobile.status_code == 201
+
+            # Invalid device
+            invalid = client.post(
+                "/keywords",
+                json={
+                    "phrase": phrase,
+                    "country_code": "DE",
+                    "device": "tablet",
+                },
+            )
+
+            assert invalid.status_code == 422
+
+    finally:
+        app.dependency_overrides.pop(get_db, None)
