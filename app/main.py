@@ -1,6 +1,6 @@
 
 from typing import Literal
-
+from app.routers.domains import router as domains_router
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
@@ -10,6 +10,7 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.include_router(domains_router)
 
 class RankingRequest(BaseModel):
     previous_position: int = Field(ge=1, le=100)

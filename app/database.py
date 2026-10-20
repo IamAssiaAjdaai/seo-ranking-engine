@@ -2,7 +2,8 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
-
+from collections.abc import Generator
+from sqlalchemy.orm import Session
 
 class Settings(BaseSettings):
     postgres_user: str
@@ -32,3 +33,7 @@ engine = create_engine(
     database_url,
     pool_pre_ping=True,
 )
+
+def get_db() -> Generator[Session, None, None]:
+    with Session(engine) as session:
+        yield session

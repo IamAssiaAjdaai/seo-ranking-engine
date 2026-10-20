@@ -11,6 +11,11 @@ from app.models import Domain, Keyword, Ranking
 
 from sqlalchemy.exc import IntegrityError
 
+from fastapi.testclient import TestClient
+
+from app.database import get_db
+from app.main import app
+
 @pytest.fixture
 def db_connection():
     # Never run database tests against development DB
@@ -188,3 +193,48 @@ def test_invalid_foreign_key_rejected(db_connection):
         assert exc.value.orig.sqlstate == "23503"
 
         session.rollback()
+
+def test_create_domain_api(db_connection):
+
+    def override_get_db():
+        with Session(
+            bind=db_connection,
+            join_transaction_mode="create_savepoint",
+        ) as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        hostname = f"api-{uuid4().hex[:12]}.example"
+
+        with TestClient(app) as client:
+
+            # New domain
+            response = client.post(
+                "/domains",
+                json={"hostname": f"  {hostname.upper()}  "},
+            )
+
+            assert response.status_code == 201
+            assert response.json()["hostname"] == hostname
+            assert isinstance(response.json()["id"], int)
+
+            # Duplicate domain
+            duplicate = client.post(
+                "/domains",
+                json={"hostname": hostname},
+            )
+
+            assert duplicate.status_code == 409
+
+            # Invalid hostname
+            invalid = client.post(
+                "/domains",
+                json={"hostname": "https://example.de/path"},
+            )
+
+            assert invalid.status_code == 422
+
+    finally:
+        app.dependency_overrides.pop(get_db, None)
